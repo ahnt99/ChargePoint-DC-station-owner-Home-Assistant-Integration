@@ -134,31 +134,17 @@ series:
         const [month, day] = label.split('/');
         return [new Date(year, parseInt(month)-1, parseInt(day), 0, 0, 0).getTime(), y[i]];
       });
-  - entity: sensor.your_station_last_7_days_sessions
-    name: Sessions
-    type: line
-    color: "#ff9800"
-    yaxis_id: sessions
-    data_generator: |
-      const x = entity.attributes.chart_daily_x;
-      const s = entity.attributes.chart_daily_sessions;
-      const year = new Date().getFullYear();
-      return x.map((label, i) => {
-        const [month, day] = label.split('/');
-        return [new Date(year, parseInt(month)-1, parseInt(day), 0, 0, 0).getTime(), s[i]];
-      });
+    show:
+      datalabels: true
 yaxis:
-  - id: energy
-    min: 0
+  - min: 0
+    decimals: 0
     apex_config:
+      tickAmount: 4
       title:
         text: kWh
-  - id: sessions
-    min: 0
-    opposite: true
-    apex_config:
-      title:
-        text: Sessions
+      axisBorder:
+        show: true
 apex_config:
   chart:
     height: 300
@@ -173,20 +159,28 @@ apex_config:
         ranges:
           - from: 0
             to: 39.99
-            color: "#4caf50"
+            color: "#025c50"
           - from: 40
             to: 79.99
-            color: "#ffc107"
+            color: "#02ab94"
           - from: 80
             to: 99999
-            color: "#f44336"
+            color: "#02f5d4"
+  dataLabels:
+    style:
+      colors:
+        - "#00000"
+    offsetY: -11
 ```
 
 ### Monthly Energy Comparison (apexcharts-card)
 
 ```yaml
 type: custom:apexcharts-card
-chart_type: bar
+graph_span: 3month
+span:
+  start: month
+  offset: "-70days"
 header:
   show: true
   title: Monthly Energy Comparison
@@ -194,18 +188,21 @@ header:
   colorize_states: true
 series:
   - entity: sensor.your_station_energy_2_months_ago
-    color: "#b0bec5"
+    color: "#025c50"
+    type: column
     name: 2 months ago
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
   - entity: sensor.your_station_energy_last_month
-    color: "#0288d1"
-    name: last month
+    color: "#02ab94"
+    type: column
+    name: Last month
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
   - entity: sensor.your_station_energy_this_month
-    color: "#03a9f4"
-    name: this month
+    color: "#02f5d4"
+    type: column
+    name: This month
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
 apex_config:
@@ -213,17 +210,18 @@ apex_config:
     height: 280
   plotOptions:
     bar:
-      columnWidth: 50%
-      dataLabels:
-        position: top
-  dataLabels:
-    enabled: true
-    formatter: |
-      EVAL:function(val) { return val > 0 ? parseFloat(val).toFixed(0) + ' kWh' : ''; }
+      columnWidth: 70%
   yaxis:
-    min: 0
+    decimalsInFloat: 0
     title:
       text: kWh
+    axisBorder:
+      show: true
+  xaxis:
+    labels:
+      format: MMMM yyyy
+  legend:
+    show: false
 ```
 
 ---
