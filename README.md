@@ -46,7 +46,7 @@ A Home Assistant custom integration for **ChargePoint commercial station owners*
 
 ### Manual Installation
 
-1. Download the latest release zip from the [Releases](https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration/releases) page
+1. Download the latest zip from the [Releases](https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration/archive/refs/heads/main.zip)
 2. Extract and copy the `chargepoint_owner` folder into your `config/custom_components/` directory
 3. Restart Home Assistant
 
