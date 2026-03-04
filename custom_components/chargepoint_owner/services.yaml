@@ -1,0 +1,13 @@
+probe_api:
+  name: Probe All API Methods
+  description: >
+    Calls every ChargePoint API method for the configured station and logs
+    the full raw response at INFO level. Check the HA logs after calling this
+    to see all data the API exposes. Useful for discovering new sensors.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: The config entry ID (leave blank to probe all configured stations)
+      required: false
+      selector:
+        text:
