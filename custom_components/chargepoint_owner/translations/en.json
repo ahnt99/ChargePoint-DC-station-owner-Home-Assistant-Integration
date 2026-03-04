@@ -1,0 +1,46 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ChargePoint API Credentials",
+        "description": "Enter your ChargePoint API credentials. Find these under *Organizations > API Info* in the ChargePoint portal. See the [API setup guide]({api_docs_url}) for help.",
+        "data": {
+          "api_key": "API License Key",
+          "api_password": "API Password"
+        },
+        "data_description": {
+          "api_key": "Your ChargePoint API license key (long hex string from Organizations > API Info)",
+          "api_password": "Your generated API password"
+        }
+      },
+      "pick_station": {
+        "title": "Select Your Station",
+        "description": "Choose which charging station to add and set the polling interval.",
+        "data": {
+          "station_id": "Charging Station",
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to ChargePoint API. Check your network.",
+      "invalid_auth": "Invalid API credentials. Verify your License Key and Password.",
+      "no_stations": "No charging stations found for this account.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This ChargePoint station is already configured.",
+      "no_stations": "No charging stations found for this account."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ChargePoint Options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  }
+}
