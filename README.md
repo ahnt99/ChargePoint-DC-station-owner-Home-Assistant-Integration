@@ -279,8 +279,4 @@ SOAP methods used:
 - `getAlarms` — station fault and event history
 - `shedLoad` / `clearShedState` — load control
 
----
 
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
