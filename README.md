@@ -111,8 +111,8 @@ A Home Assistant custom integration for **ChargePoint commercial station owners*
 ### 7-Day Energy & Session Chart (apexcharts-card)
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
-<img width="521" height="369" alt="Screenshot1" src="https://github.com/user-attachments/assets/505faa4f-1572-4c55-9d58-b2e9e5715c64" />
 
+<img width="521" height="369" alt="Screenshot1" src="https://github.com/user-attachments/assets/505faa4f-1572-4c55-9d58-b2e9e5715c64" />
 ```yaml
 type: custom:apexcharts-card
 header:
