@@ -177,6 +177,8 @@ apex_config:
 
 ### Monthly Energy Comparison (apexcharts-card)
 
+<img width="523" height="406" alt="Screenshot2" src="https://github.com/user-attachments/assets/982f68d9-43d5-4bc6-9ac3-65c4c998fb24" />
+
 ```yaml
 type: custom:apexcharts-card
 graph_span: 3month
