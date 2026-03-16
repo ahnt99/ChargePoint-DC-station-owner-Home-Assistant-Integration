@@ -68,7 +68,7 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             try:
                 self._session_cache = await self.hass.async_add_executor_job(
-                    self.client.get_charging_session_data, self.station_id, 35
+                    self.client.get_charging_session_data, self.station_id, 10
                 )
                 self._monthly_cache = await self.hass.async_add_executor_job(
                     self.client.get_monthly_session_data, self.station_id, local_tz

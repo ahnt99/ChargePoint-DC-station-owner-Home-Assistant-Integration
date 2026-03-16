@@ -269,16 +269,22 @@ class ChargePointClient:
     def get_charging_session_data(
         self,
         station_id: str,
-        days_back: int = 30,
+        days_back: int = 10,
     ) -> list[dict]:
-        """Call getChargingSessionData — fetches sessions from the last `days_back` days."""
+        """Fetch sessions within a tight recent window to stay under the 100-record API cap.
+
+        Always sends both fromTimeStamp AND toTimeStamp so the API returns the
+        most recent sessions in the window rather than the oldest 100 on record.
+        Sessions are sorted newest-first before returning.
+        """
         from datetime import datetime, timezone, timedelta
 
-        # Always request a recent window so we get current data, not oldest historical batch
-        start_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
+        now = datetime.now(timezone.utc)
+        start_dt = now - timedelta(days=days_back)
         kwargs: dict[str, Any] = {
             "stationID": station_id,
             "fromTimeStamp": start_dt,
+            "toTimeStamp": now,
         }
         q = self._make_type("sessionSearchdata", **kwargs)
 
@@ -301,6 +307,11 @@ class ChargePointClient:
                 "Energy": getattr(s, "Energy", None),
             })
 
+        # Sort newest-first so sensors always see the most recent session at index 0
+        sessions.sort(
+            key=lambda s: s["endTime"] if s.get("endTime") else datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
         return sessions
 
     def get_monthly_session_data(self, station_id: str, local_tz) -> list[dict]:
