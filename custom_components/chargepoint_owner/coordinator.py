@@ -32,14 +32,9 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self.station_id = station_id
-        # Cache session/alarm data — only refresh every 5 minutes to avoid hammering API
         self._session_cache: list[dict] = []
         self._monthly_cache: list[dict] = []
         self._alarm_cache: list[dict] = []
-        self._last_session_fetch: datetime | None = None
-        self._last_alarm_fetch: datetime | None = None
-        self._SESSION_TTL = timedelta(minutes=5)
-        self._ALARM_TTL = timedelta(minutes=5)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest data from the API."""
@@ -60,35 +55,24 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:
             local_tz = timezone.utc
 
-        # Refresh session history every 5 minutes
-        now = datetime.now(timezone.utc)
-        if (
-            self._last_session_fetch is None
-            or (now - self._last_session_fetch) >= self._SESSION_TTL
-        ):
-            try:
-                self._session_cache = await self.hass.async_add_executor_job(
-                    self.client.get_charging_session_data, self.station_id, 10
-                )
-                self._monthly_cache = await self.hass.async_add_executor_job(
-                    self.client.get_monthly_session_data, self.station_id, local_tz
-                )
-                self._last_session_fetch = now
-            except ChargePointAPIError as err:
-                _LOGGER.warning("Could not fetch session data: %s", err)
+        # Fetch session history every poll cycle
+        try:
+            self._session_cache = await self.hass.async_add_executor_job(
+                self.client.get_charging_session_data, self.station_id, 10
+            )
+            self._monthly_cache = await self.hass.async_add_executor_job(
+                self.client.get_monthly_session_data, self.station_id, local_tz
+            )
+        except ChargePointAPIError as err:
+            _LOGGER.warning("Could not fetch session data: %s", err)
 
-        # Refresh alarms every 5 minutes
-        if (
-            self._last_alarm_fetch is None
-            or (now - self._last_alarm_fetch) >= self._ALARM_TTL
-        ):
-            try:
-                self._alarm_cache = await self.hass.async_add_executor_job(
-                    self.client.get_alarms, self.station_id
-                )
-                self._last_alarm_fetch = now
-            except ChargePointAPIError as err:
-                _LOGGER.warning("Could not fetch alarm data: %s", err)
+        # Fetch alarms every poll cycle
+        try:
+            self._alarm_cache = await self.hass.async_add_executor_job(
+                self.client.get_alarms, self.station_id
+            )
+        except ChargePointAPIError as err:
+            _LOGGER.warning("Could not fetch alarm data: %s", err)
 
         # Index load port data by port number
         port_loads: dict[str, dict] = {}
