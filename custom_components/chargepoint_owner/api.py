@@ -266,54 +266,6 @@ class ChargePointClient:
 
         return result
 
-    def get_charging_session_data(
-        self,
-        station_id: str,
-        days_back: int = 10,
-    ) -> list[dict]:
-        """Fetch sessions within a tight recent window to stay under the 100-record API cap.
-
-        Always sends both fromTimeStamp AND toTimeStamp so the API returns the
-        most recent sessions in the window rather than the oldest 100 on record.
-        Sessions are sorted newest-first before returning.
-        """
-        from datetime import datetime, timezone, timedelta
-
-        now = datetime.now(timezone.utc)
-        start_dt = now - timedelta(days=days_back)
-        kwargs: dict[str, Any] = {
-            "stationID": station_id,
-            "fromTimeStamp": start_dt,
-            "toTimeStamp": now,
-        }
-        q = self._make_type("sessionSearchdata", **kwargs)
-
-        response = self._call("getChargingSessionData", searchQuery=q)
-        sessions = []
-        data = getattr(response, "ChargingSessionData", None)
-        if data is None:
-            return sessions
-        if not isinstance(data, list):
-            data = [data]
-
-        for s in data:
-            sessions.append({
-                "sessionID": getattr(s, "sessionID", None),
-                "stationID": getattr(s, "stationID", None),
-                "portNumber": getattr(s, "portNumber", None),
-                "userID": getattr(s, "userID", None),
-                "startTime": getattr(s, "startTime", None),
-                "endTime": getattr(s, "endTime", None),
-                "Energy": getattr(s, "Energy", None),
-            })
-
-        # Sort newest-first so sensors always see the most recent session at index 0
-        sessions.sort(
-            key=lambda s: s["endTime"] if s.get("endTime") else datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-        return sessions
-
     def get_monthly_session_data(self, station_id: str, local_tz) -> list[dict]:
         """Fetch sessions for current month and previous 2 months separately.
 
@@ -382,9 +334,14 @@ class ChargePointClient:
             except Exception as exc:
                 _LOGGER.warning("Monthly session fetch offset=%d unexpected error: %s", offset, exc)
 
+        # Sort newest-first so _compute_session_stats finds the most recent session at [0]
+        all_sessions.sort(
+            key=lambda s: s["endTime"] if s.get("endTime") else datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
         return all_sessions
 
-
+    def shed_load(self, station_id: str, port_number: int, allowed_load: float) -> None:
         """Call shedLoad — uses shedLoadQueryInputData."""
         q = self._make_type(
             "shedLoadQueryInputData",

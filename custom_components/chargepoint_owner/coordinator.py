@@ -32,7 +32,6 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self.station_id = station_id
-        self._session_cache: list[dict] = []
         self._monthly_cache: list[dict] = []
         self._alarm_cache: list[dict] = []
 
@@ -55,11 +54,10 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:
             local_tz = timezone.utc
 
-        # Fetch session history every poll cycle
+        # Fetch session history — monthly cache covers current + 2 prior months
+        # with per-month scoped API calls that never hit the 100-record cap.
+        # The 7-day stats are derived from this same data by filtering on cutoff.
         try:
-            self._session_cache = await self.hass.async_add_executor_job(
-                self.client.get_charging_session_data, self.station_id, 10
-            )
             self._monthly_cache = await self.hass.async_add_executor_job(
                 self.client.get_monthly_session_data, self.station_id, local_tz
             )
@@ -89,8 +87,8 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Compute monthly energy buckets in local timezone
         monthly_stats = _compute_monthly_stats(self._monthly_cache, local_tz)
 
-        # Compute session stats from cache
-        session_stats = _compute_session_stats(self._session_cache, cutoff_utc)
+        # Compute session stats from monthly cache, filtered to 7-day window
+        session_stats = _compute_session_stats(self._monthly_cache, cutoff_utc)
 
         # Build per-port dict keyed by "stationID:portNumber"
         ports: dict[str, dict] = {}
@@ -145,7 +143,7 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "session_last_duration_min": session_stats["last_duration_min"],
             "session_avg_energy_kwh": session_stats["avg_energy"],
             # Raw session list for attributes (sorted newest-first by endTime)
-            "sessions": self._session_cache[:20],
+            "sessions": self._monthly_cache[:20],
             # Alarm data
             "latest_alarm": latest_alarm,
             "latest_alarm_time": latest_alarm_time,
