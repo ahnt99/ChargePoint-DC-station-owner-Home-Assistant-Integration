@@ -267,35 +267,73 @@ class ChargePointClient:
         return result
 
     def get_monthly_session_data(self, station_id: str, local_tz) -> list[dict]:
-        """Fetch sessions for current month and previous 2 months separately.
+        """Fetch sessions for current month and previous 2 months in weekly chunks.
 
-        Makes 3 API calls scoped to each calendar month so we never hit the
-        100-record cap that causes the API to return oldest sessions instead of newest.
+        Splits each month into 7-day windows so even a very busy station
+        (10+ sessions/day) never hits the 100-record API cap per call.
         """
         from datetime import datetime, timezone, timedelta
         import calendar
 
+        now_utc = datetime.now(timezone.utc)
         now_local = datetime.now(local_tz if local_tz else timezone.utc)
         all_sessions: list[dict] = []
 
+        def _fetch_window(from_dt: datetime, to_dt: datetime) -> list[dict]:
+            """Fetch one time window, return parsed sessions. Returns [] on 136."""
+            kwargs: dict[str, Any] = {
+                "stationID": station_id,
+                "fromTimeStamp": from_dt,
+                "toTimeStamp": to_dt,
+            }
+            q = self._make_type("sessionSearchdata", **kwargs)
+            try:
+                response = self._call("getChargingSessionData", searchQuery=q)
+                data = getattr(response, "ChargingSessionData", None)
+                if data is None:
+                    return []
+                if not isinstance(data, list):
+                    data = [data]
+                return [{
+                    "sessionID": getattr(s, "sessionID", None),
+                    "portNumber": getattr(s, "portNumber", None),
+                    "startTime": getattr(s, "startTime", None),
+                    "endTime": getattr(s, "endTime", None),
+                    "Energy": getattr(s, "Energy", None),
+                } for s in data]
+            except ChargePointAPIError as exc:
+                if "136" in str(exc):
+                    return []
+                _LOGGER.warning("Session fetch %s→%s failed: %s", from_dt.date(), to_dt.date(), exc)
+                return []
+            except Exception as exc:
+                _LOGGER.warning("Session fetch %s→%s unexpected error: %s", from_dt.date(), to_dt.date(), exc)
+                return []
+
+        def _fetch_month_in_chunks(year: int, month: int, month_end_utc: datetime) -> list[dict]:
+            """Fetch an entire month by splitting into 7-day chunks."""
+            month_start_local = now_local.replace(
+                year=year, month=month, day=1,
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            month_start_utc = month_start_local.astimezone(timezone.utc)
+            chunk_start = month_start_utc
+            sessions: list[dict] = []
+            while chunk_start < month_end_utc:
+                chunk_end = min(chunk_start + timedelta(days=7), month_end_utc)
+                sessions.extend(_fetch_window(chunk_start, chunk_end))
+                chunk_start = chunk_end
+            return sessions
+
         for offset in range(3):
-            # Compute (year, month) going back `offset` months
             month = now_local.month - offset
             year = now_local.year
             while month <= 0:
                 month += 12
                 year -= 1
 
-            # Start = midnight on the 1st of that month (local), converted to UTC
-            month_start_local = now_local.replace(
-                year=year, month=month, day=1,
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            month_start_utc = month_start_local.astimezone(timezone.utc)
-
-            # End = midnight on 1st of NEXT month (exclusive), or now for current month
             if offset == 0:
-                month_end_utc = datetime.now(timezone.utc)
+                month_end_utc = now_utc
             else:
                 last_day = calendar.monthrange(year, month)[1]
                 month_end_local = now_local.replace(
@@ -304,35 +342,7 @@ class ChargePointClient:
                 )
                 month_end_utc = month_end_local.astimezone(timezone.utc)
 
-            kwargs: dict[str, Any] = {
-                "stationID": station_id,
-                "fromTimeStamp": month_start_utc,
-                "toTimeStamp": month_end_utc,
-            }
-            q = self._make_type("sessionSearchdata", **kwargs)
-            try:
-                response = self._call("getChargingSessionData", searchQuery=q)
-                data = getattr(response, "ChargingSessionData", None)
-                if data is None:
-                    continue
-                if not isinstance(data, list):
-                    data = [data]
-                for s in data:
-                    all_sessions.append({
-                        "sessionID": getattr(s, "sessionID", None),
-                        "portNumber": getattr(s, "portNumber", None),
-                        "startTime": getattr(s, "startTime", None),
-                        "endTime": getattr(s, "endTime", None),
-                        "Energy": getattr(s, "Energy", None),
-                    })
-            except ChargePointAPIError as exc:
-                # 136 = no session data for this period — perfectly normal for quiet months
-                if "136" in str(exc):
-                    _LOGGER.debug("No sessions for month offset=%d (error 136)", offset)
-                else:
-                    _LOGGER.warning("Monthly session fetch offset=%d failed: %s", offset, exc)
-            except Exception as exc:
-                _LOGGER.warning("Monthly session fetch offset=%d unexpected error: %s", offset, exc)
+            all_sessions.extend(_fetch_month_in_chunks(year, month, month_end_utc))
 
         # Sort newest-first so _compute_session_stats finds the most recent session at [0]
         all_sessions.sort(
