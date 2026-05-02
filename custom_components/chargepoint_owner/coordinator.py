@@ -56,21 +56,26 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Fetch session history — monthly cache covers current + 2 prior months
         # with per-month scoped API calls that never hit the 100-record cap.
-        # The 7-day stats are derived from this same data by filtering on cutoff.
+        # On any failure, keep the last known good cache so sensors stay populated.
         try:
-            self._monthly_cache = await self.hass.async_add_executor_job(
+            fresh = await self.hass.async_add_executor_job(
                 self.client.get_monthly_session_data, self.station_id, local_tz
             )
-        except ChargePointAPIError as err:
-            _LOGGER.warning("Could not fetch session data: %s", err)
+            if fresh:  # Only replace cache if we got actual data back
+                self._monthly_cache = fresh
+            else:
+                _LOGGER.debug("Session fetch returned empty — keeping last good cache")
+        except Exception as err:
+            _LOGGER.warning("Could not fetch session data (keeping last cache): %s", err)
 
-        # Fetch alarms every poll cycle
+        # Fetch alarms every poll cycle — keep last good cache on failure
         try:
-            self._alarm_cache = await self.hass.async_add_executor_job(
+            fresh_alarms = await self.hass.async_add_executor_job(
                 self.client.get_alarms, self.station_id
             )
-        except ChargePointAPIError as err:
-            _LOGGER.warning("Could not fetch alarm data: %s", err)
+            self._alarm_cache = fresh_alarms
+        except Exception as err:
+            _LOGGER.warning("Could not fetch alarm data (keeping last cache): %s", err)
 
         # Index load port data by port number
         port_loads: dict[str, dict] = {}

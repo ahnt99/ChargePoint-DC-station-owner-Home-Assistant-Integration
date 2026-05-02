@@ -280,35 +280,40 @@ class ChargePointClient:
         all_sessions: list[dict] = []
 
         def _fetch_window(from_dt: datetime, to_dt: datetime) -> list[dict]:
-            """Fetch one time window, return parsed sessions. Returns [] on 136."""
+            """Fetch one time window, return parsed sessions. Retries once on transient errors."""
             kwargs: dict[str, Any] = {
                 "stationID": station_id,
                 "fromTimeStamp": from_dt,
                 "toTimeStamp": to_dt,
             }
             q = self._make_type("sessionSearchdata", **kwargs)
-            try:
-                response = self._call("getChargingSessionData", searchQuery=q)
-                data = getattr(response, "ChargingSessionData", None)
-                if data is None:
-                    return []
-                if not isinstance(data, list):
-                    data = [data]
-                return [{
-                    "sessionID": getattr(s, "sessionID", None),
-                    "portNumber": getattr(s, "portNumber", None),
-                    "startTime": getattr(s, "startTime", None),
-                    "endTime": getattr(s, "endTime", None),
-                    "Energy": getattr(s, "Energy", None),
-                } for s in data]
-            except ChargePointAPIError as exc:
-                if "136" in str(exc):
-                    return []
-                _LOGGER.warning("Session fetch %s→%s failed: %s", from_dt.date(), to_dt.date(), exc)
-                return []
-            except Exception as exc:
-                _LOGGER.warning("Session fetch %s→%s unexpected error: %s", from_dt.date(), to_dt.date(), exc)
-                return []
+            last_exc = None
+            for attempt in range(2):  # Try twice before giving up
+                try:
+                    response = self._call("getChargingSessionData", searchQuery=q)
+                    data = getattr(response, "ChargingSessionData", None)
+                    if data is None:
+                        return []
+                    if not isinstance(data, list):
+                        data = [data]
+                    return [{
+                        "sessionID": getattr(s, "sessionID", None),
+                        "portNumber": getattr(s, "portNumber", None),
+                        "startTime": getattr(s, "startTime", None),
+                        "endTime": getattr(s, "endTime", None),
+                        "Energy": getattr(s, "Energy", None),
+                    } for s in data]
+                except ChargePointAPIError as exc:
+                    if "136" in str(exc):
+                        return []  # No data for period — not an error
+                    last_exc = exc
+                except Exception as exc:
+                    last_exc = exc
+                if attempt == 0:
+                    import time
+                    time.sleep(2)  # Brief pause before retry
+            _LOGGER.warning("Session fetch %s→%s failed after retry: %s", from_dt.date(), to_dt.date(), last_exc)
+            return []
 
         def _fetch_month_in_chunks(year: int, month: int, month_end_utc: datetime) -> list[dict]:
             """Fetch an entire month by splitting into 7-day chunks."""
