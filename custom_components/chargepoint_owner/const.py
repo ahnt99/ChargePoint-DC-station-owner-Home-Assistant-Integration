@@ -13,7 +13,10 @@ DEFAULT_SCAN_INTERVAL = 60  # seconds
 DEFAULT_NAME = "ChargePoint"
 
 # ChargePoint SOAP API
-CHARGEPOINT_WSDL = "https://webservices.chargepoint.com/cp_api_5.0.wsdl"
+import pathlib
+
+_DIR = pathlib.Path(__file__).parent
+CHARGEPOINT_WSDL = str(_DIR / "chargepoint_5.0.wsdl")
 CHARGEPOINT_ENDPOINT = "https://webservices.chargepoint.com/webservices/chargepoint/services/5.0"
 WSSE_NS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
 PASSWORD_TYPE = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText"

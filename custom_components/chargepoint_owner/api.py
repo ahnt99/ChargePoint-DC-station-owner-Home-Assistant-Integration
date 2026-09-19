@@ -70,6 +70,10 @@ class ChargePointClient:
         t = client.get_type(f"ns0:{type_name}")
         return t(**fields)
 
+    def _reset_client(self) -> None:
+        """Force zeep client to rebuild on next call — used after connection errors."""
+        self._client = None
+
     def _call(self, method: str, **kwargs: Any) -> Any:
         """Make a SOAP call, log the full serialized response for debugging, handle errors."""
         client = self._get_client()
@@ -82,6 +86,9 @@ class ChargePointClient:
             raise ChargePointAPIError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             _LOGGER.error("Error calling %s: %s", method, exc)
+            # Reset client so zeep rebuilds cleanly on next call
+            # (prevents stale/corrupted state after 404/502/timeout outages)
+            self._reset_client()
             raise ChargePointAPIError(str(exc)) from exc
 
         # Log full response so we can see exactly what the API returns
@@ -355,6 +362,90 @@ class ChargePointClient:
             reverse=True,
         )
         return all_sessions
+
+    def get_transaction_data(self, station_id: str, local_tz) -> list[dict]:
+        """Fetch transaction data (with revenue) for current + 2 prior months in weekly chunks."""
+        from datetime import datetime, timezone, timedelta
+        import calendar
+
+        now_utc = datetime.now(timezone.utc)
+        now_local = datetime.now(local_tz if local_tz else timezone.utc)
+        all_transactions: list[dict] = []
+
+        def _fetch_window(from_dt: datetime, to_dt: datetime) -> list[dict]:
+            kwargs: dict[str, Any] = {
+                "stationID": station_id,
+                "fromTransactionTimeStamp": from_dt,
+                "toTransactionTimeStamp": to_dt,
+            }
+            q = self._make_type("getTransDataSearchRequest", **kwargs)
+            for attempt in range(2):
+                try:
+                    response = self._call("getTransactionData", searchQuery=q)
+                    result = getattr(response, "transactions", None)
+                    if result is None:
+                        return []
+                    data = getattr(result, "transactionData", None) or []
+                    if not isinstance(data, list):
+                        data = [data]
+                    return [{
+                        "transactionID": getattr(t, "transactionID", None),
+                        "portNumber": str(getattr(t, "portNumber", "") or ""),
+                        "startTime": getattr(t, "startTime", None),
+                        "endTime": getattr(t, "endTime", None),
+                        "Energy": getattr(t, "Energy", None),
+                        "grossAmount": getattr(t, "grossAmount", None),
+                        "flexBillingServiceFee": getattr(t, "flexBillingServiceFee", None),
+                        "netRevenue": getattr(t, "netRevenue", None),
+                        "Currency": str(getattr(t, "Currency", "") or ""),
+                    } for t in data]
+                except ChargePointAPIError as exc:
+                    if "136" in str(exc):
+                        return []
+                    if attempt == 0:
+                        import time; time.sleep(2)
+                        continue
+                    _LOGGER.warning("Transaction fetch %s→%s failed: %s", from_dt.date(), to_dt.date(), exc)
+                    return []
+                except Exception as exc:
+                    if attempt == 0:
+                        import time; time.sleep(2)
+                        continue
+                    _LOGGER.warning("Transaction fetch %s→%s unexpected: %s", from_dt.date(), to_dt.date(), exc)
+                    return []
+            return []
+
+        def _fetch_month_chunks(year: int, month: int, month_end_utc: datetime) -> list[dict]:
+            month_start_local = now_local.replace(
+                year=year, month=month, day=1,
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            chunk_start = month_start_local.astimezone(timezone.utc)
+            sessions: list[dict] = []
+            while chunk_start < month_end_utc:
+                chunk_end = min(chunk_start + timedelta(days=7), month_end_utc)
+                sessions.extend(_fetch_window(chunk_start, chunk_end))
+                chunk_start = chunk_end
+            return sessions
+
+        for offset in range(3):
+            month = now_local.month - offset
+            year = now_local.year
+            while month <= 0:
+                month += 12
+                year -= 1
+            month_end_utc = now_utc if offset == 0 else now_local.replace(
+                year=year, month=month,
+                day=calendar.monthrange(year, month)[1],
+                hour=23, minute=59, second=59, microsecond=0
+            ).astimezone(timezone.utc)
+            all_transactions.extend(_fetch_month_chunks(year, month, month_end_utc))
+
+        all_transactions.sort(
+            key=lambda t: t["endTime"] if t.get("endTime") else datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return all_transactions
 
     def shed_load(self, station_id: str, port_number: int, allowed_load: float) -> None:
         """Call shedLoad — uses shedLoadQueryInputData."""

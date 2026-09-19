@@ -33,6 +33,7 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self.station_id = station_id
         self._monthly_cache: list[dict] = []
+        self._transaction_cache: list[dict] = []
         self._alarm_cache: list[dict] = []
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -67,6 +68,17 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("Session fetch returned empty — keeping last good cache")
         except Exception as err:
             _LOGGER.warning("Could not fetch session data (keeping last cache): %s", err)
+
+        try:
+            fresh_tx = await self.hass.async_add_executor_job(
+                self.client.get_transaction_data, self.station_id, local_tz
+            )
+            if fresh_tx:
+                self._transaction_cache = fresh_tx
+            else:
+                _LOGGER.debug("Transaction fetch returned empty — keeping last good cache")
+        except Exception as err:
+            _LOGGER.warning("Could not fetch transaction data (keeping last cache): %s", err)
 
         # Fetch alarms every poll cycle — keep last good cache on failure
         try:
@@ -125,6 +137,9 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             latest_alarm = self._alarm_cache[0].get("alarmType", "").strip()
             latest_alarm_time = self._alarm_cache[0].get("alarmTime")
 
+        # Compute monthly revenue from transaction cache
+        revenue_stats = _compute_monthly_revenue(self._transaction_cache, local_tz)
+
         return {
             "stationID": self.station_id,
             "stationName": load_data.get("stationName"),
@@ -142,6 +157,17 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "monthly_1_label": monthly_stats.get("month_1_label", ""),
             "monthly_2_kwh": monthly_stats.get("month_2_kwh", 0),
             "monthly_2_label": monthly_stats.get("month_2_label", ""),
+            # Monthly revenue — flattened for individual sensors
+            "revenue_0_net": revenue_stats.get("current_net", 0),
+            "revenue_0_gross": revenue_stats.get("current_gross", 0),
+            "revenue_0_label": revenue_stats.get("current_month", ""),
+            "revenue_1_net": revenue_stats.get("month_1_net", 0),
+            "revenue_1_gross": revenue_stats.get("month_1_gross", 0),
+            "revenue_1_label": revenue_stats.get("month_1_label", ""),
+            "revenue_2_net": revenue_stats.get("month_2_net", 0),
+            "revenue_2_gross": revenue_stats.get("month_2_gross", 0),
+            "revenue_2_label": revenue_stats.get("month_2_label", ""),
+            "revenue_currency": revenue_stats.get("currency", "USD"),
             "session_last_energy_kwh": session_stats["last_energy"],
             "session_last_start": session_stats["last_start"],
             "session_last_end": session_stats["last_end"],
@@ -276,5 +302,61 @@ def _compute_monthly_stats(sessions: list[dict], local_tz) -> dict[str, Any]:
         else:
             result[f"month_{i}_label"] = label
             result[f"month_{i}_kwh"] = energy
+
+    return result
+
+
+def _compute_monthly_revenue(transactions: list[dict], local_tz) -> dict[str, Any]:
+    """Compute gross and net revenue totals for current month and previous 2 months."""
+    from datetime import datetime, timezone
+    from collections import defaultdict
+
+    def _to_local(dt):
+        if dt is None:
+            return None
+        try:
+            aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return aware.astimezone(local_tz) if local_tz else aware
+        except Exception:
+            return None
+
+    today = datetime.now(local_tz if local_tz else timezone.utc)
+    months = []
+    for offset in range(3):
+        month = today.month - offset
+        year = today.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        months.append((year, month))
+
+    gross_sums: dict[tuple, float] = defaultdict(float)
+    net_sums: dict[tuple, float] = defaultdict(float)
+    currency = "USD"
+
+    for t in transactions:
+        local_end = _to_local(t.get("endTime"))
+        if not local_end:
+            continue
+        key = (local_end.year, local_end.month)
+        gross = t.get("grossAmount") or 0
+        net = t.get("netRevenue") or 0
+        gross_sums[key] += gross
+        net_sums[key] += net
+        if t.get("Currency"):
+            currency = t["Currency"]
+
+    result: dict[str, Any] = {"currency": currency}
+    for i, (year, month) in enumerate(months):
+        key = (year, month)
+        label = f"{year}-{month:02d}"
+        if i == 0:
+            result["current_month"] = label
+            result["current_gross"] = round(gross_sums.get(key, 0), 2)
+            result["current_net"] = round(net_sums.get(key, 0), 2)
+        else:
+            result[f"month_{i}_label"] = label
+            result[f"month_{i}_gross"] = round(gross_sums.get(key, 0), 2)
+            result[f"month_{i}_net"] = round(net_sums.get(key, 0), 2)
 
     return result

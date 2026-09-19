@@ -274,6 +274,54 @@ SESSION_SENSOR_DESCRIPTIONS: tuple[ChargePointSessionSensorDescription, ...] = (
         data_key="monthly_energy",
     ),
     ChargePointSessionSensorDescription(
+        key="revenue_0_net",
+        name="Net Revenue This Month",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-plus",
+        data_key="revenue_0_net",
+    ),
+    ChargePointSessionSensorDescription(
+        key="revenue_0_gross",
+        name="Gross Revenue This Month",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash",
+        data_key="revenue_0_gross",
+    ),
+    ChargePointSessionSensorDescription(
+        key="revenue_1_net",
+        name="Net Revenue Last Month",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-plus",
+        data_key="revenue_1_net",
+    ),
+    ChargePointSessionSensorDescription(
+        key="revenue_1_gross",
+        name="Gross Revenue Last Month",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash",
+        data_key="revenue_1_gross",
+    ),
+    ChargePointSessionSensorDescription(
+        key="revenue_2_net",
+        name="Net Revenue 2 Months Ago",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-plus",
+        data_key="revenue_2_net",
+    ),
+    ChargePointSessionSensorDescription(
+        key="revenue_2_gross",
+        name="Gross Revenue 2 Months Ago",
+        native_unit_of_measurement="USD",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash",
+        data_key="revenue_2_gross",
+    ),
+    ChargePointSessionSensorDescription(
         key="monthly_energy_0",
         name="Energy This Month",
         native_unit_of_measurement="kWh",
@@ -389,6 +437,19 @@ class ChargePointSessionSensor(ChargePointPortEntity, SensorEntity):
                 val.get("month_1_label", ""): val.get("month_1_kwh", 0),
                 val.get("month_2_label", ""): val.get("month_2_kwh", 0),
             }
+
+        if key in ("revenue_0_net", "revenue_0_gross"):
+            label = self.coordinator.data.get("revenue_0_label", "")
+            return {"period": label, "month_name": _label_to_month_name(label),
+                    "currency": self.coordinator.data.get("revenue_currency", "USD")}
+        if key in ("revenue_1_net", "revenue_1_gross"):
+            label = self.coordinator.data.get("revenue_1_label", "")
+            return {"period": label, "month_name": _label_to_month_name(label),
+                    "currency": self.coordinator.data.get("revenue_currency", "USD")}
+        if key in ("revenue_2_net", "revenue_2_gross"):
+            label = self.coordinator.data.get("revenue_2_label", "")
+            return {"period": label, "month_name": _label_to_month_name(label),
+                    "currency": self.coordinator.data.get("revenue_currency", "USD")}
 
         if key == "monthly_energy_0":
             label = self.coordinator.data.get("monthly_0_label", "")
