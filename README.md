@@ -38,7 +38,7 @@ A Home Assistant custom integration for **ChargePoint commercial station owners*
 1. Open HACS in your Home Assistant instance
 2. Go to **Integrations**
 3. Click the three-dot menu (⋮) in the top right → **Custom repositories**
-4. Add the repository URL: `https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration`
+4. Add the repository URL: `https://github.com/your-username/chargepoint-owner-ha`
 5. Select category: **Integration**
 6. Click **Add**
 7. Find **ChargePoint Station Owner** in the list and click **Download**
@@ -46,7 +46,7 @@ A Home Assistant custom integration for **ChargePoint commercial station owners*
 
 ### Manual Installation
 
-1. Download the latest zip from the [link](https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration/archive/refs/heads/main.zip)
+1. Download the latest release zip from the [Releases](https://github.com/your-username/chargepoint-owner-ha/releases) page
 2. Extract and copy the `chargepoint_owner` folder into your `config/custom_components/` directory
 3. Restart Home Assistant
 
@@ -112,8 +112,6 @@ A Home Assistant custom integration for **ChargePoint commercial station owners*
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
 
-<img width="521" height="369" alt="Screenshot1" src="https://github.com/user-attachments/assets/505faa4f-1572-4c55-9d58-b2e9e5715c64" />
-
 ```yaml
 type: custom:apexcharts-card
 header:
@@ -136,17 +134,31 @@ series:
         const [month, day] = label.split('/');
         return [new Date(year, parseInt(month)-1, parseInt(day), 0, 0, 0).getTime(), y[i]];
       });
-    show:
-      datalabels: true
+  - entity: sensor.your_station_last_7_days_sessions
+    name: Sessions
+    type: line
+    color: "#ff9800"
+    yaxis_id: sessions
+    data_generator: |
+      const x = entity.attributes.chart_daily_x;
+      const s = entity.attributes.chart_daily_sessions;
+      const year = new Date().getFullYear();
+      return x.map((label, i) => {
+        const [month, day] = label.split('/');
+        return [new Date(year, parseInt(month)-1, parseInt(day), 0, 0, 0).getTime(), s[i]];
+      });
 yaxis:
-  - min: 0
-    decimals: 0
+  - id: energy
+    min: 0
     apex_config:
-      tickAmount: 4
       title:
         text: kWh
-      axisBorder:
-        show: true
+  - id: sessions
+    min: 0
+    opposite: true
+    apex_config:
+      title:
+        text: Sessions
 apex_config:
   chart:
     height: 300
@@ -161,30 +173,20 @@ apex_config:
         ranges:
           - from: 0
             to: 39.99
-            color: "#025c50"
+            color: "#4caf50"
           - from: 40
             to: 79.99
-            color: "#02ab94"
+            color: "#ffc107"
           - from: 80
             to: 99999
-            color: "#02f5d4"
-  dataLabels:
-    style:
-      colors:
-        - "#00000"
-    offsetY: -11
+            color: "#f44336"
 ```
 
 ### Monthly Energy Comparison (apexcharts-card)
 
-<img width="523" height="406" alt="Screenshot2" src="https://github.com/user-attachments/assets/982f68d9-43d5-4bc6-9ac3-65c4c998fb24" />
-
 ```yaml
 type: custom:apexcharts-card
-graph_span: 3month
-span:
-  start: month
-  offset: "-70days"
+chart_type: bar
 header:
   show: true
   title: Monthly Energy Comparison
@@ -192,21 +194,18 @@ header:
   colorize_states: true
 series:
   - entity: sensor.your_station_energy_2_months_ago
-    color: "#025c50"
-    type: column
+    color: "#b0bec5"
     name: 2 months ago
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
   - entity: sensor.your_station_energy_last_month
-    color: "#02ab94"
-    type: column
-    name: Last month
+    color: "#0288d1"
+    name: last month
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
   - entity: sensor.your_station_energy_this_month
-    color: "#02f5d4"
-    type: column
-    name: This month
+    color: "#03a9f4"
+    name: this month
     data_generator: |
       return [[entity.attributes.month_name, entity.state]];
 apex_config:
@@ -214,18 +213,17 @@ apex_config:
     height: 280
   plotOptions:
     bar:
-      columnWidth: 70%
+      columnWidth: 50%
+      dataLabels:
+        position: top
+  dataLabels:
+    enabled: true
+    formatter: |
+      EVAL:function(val) { return val > 0 ? parseFloat(val).toFixed(0) + ' kWh' : ''; }
   yaxis:
-    decimalsInFloat: 0
+    min: 0
     title:
       text: kWh
-    axisBorder:
-      show: true
-  xaxis:
-    labels:
-      format: MMMM yyyy
-  legend:
-    show: false
 ```
 
 ---
@@ -283,4 +281,8 @@ SOAP methods used:
 - `getAlarms` — station fault and event history
 - `shedLoad` / `clearShedState` — load control
 
+---
 
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
