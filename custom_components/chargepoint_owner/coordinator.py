@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ChargePointClient
+from .api import ChargePointClient, ChargePointAPIError
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,14 +32,45 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self.station_id = station_id
-        self._status_cache: list[dict] = []
-        self._load_cache: dict = {}
         self._monthly_cache: list[dict] = []
         self._transaction_cache: list[dict] = []
         self._alarm_cache: list[dict] = []
+        # Last known-good load data + a flag so a persistent getLoad failure
+        # (e.g. ChargePoint disabling the endpoint server-side) logs once instead
+        # of spamming the log every poll cycle.
+        self._load_cache: dict = {}
+        self._load_warned = False
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest data from the API."""
+        # getStationStatus is the critical path — if it fails, the whole poll
+        # fails (there is no usable per-port data without it).
+        try:
+            status_data = await self.hass.async_add_executor_job(
+                self.client.get_station_status, self.station_id
+            )
+        except ChargePointAPIError as err:
+            raise UpdateFailed(f"ChargePoint API error: {err}") from err
+
+        # getLoad is best-effort. ChargePoint has disabled the load-management
+        # operations (getLoad/shedLoad) server-side for some accounts, returning
+        # a 404 that is not valid XML. Catch it so the rest of the poll (status,
+        # sessions, energy, alarms) still updates, and fall back to the last
+        # known-good load data so the load/shed sensors don't go blank.
+        try:
+            load_data = await self.hass.async_add_executor_job(
+                self.client.get_load, self.station_id
+            )
+            self._load_cache = load_data
+            self._load_warned = False
+        except ChargePointAPIError as err:
+            if not self._load_warned:
+                _LOGGER.warning(
+                    "ChargePoint getLoad failed — load/shed sensors will show "
+                    "last known values until it recovers: %s", err
+                )
+                self._load_warned = True
+            load_data = self._load_cache
 
         # Resolve HA local timezone early — needed for session fetches
         try:
@@ -47,32 +78,6 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             local_tz = zoneinfo.ZoneInfo(self.hass.config.time_zone)
         except Exception:
             local_tz = timezone.utc
-
-        # --- Station status (port availability) ---
-        status_data = self._status_cache if hasattr(self, "_status_cache") else []
-        try:
-            fresh_status = await self.hass.async_add_executor_job(
-                self.client.get_station_status, self.station_id
-            )
-            if fresh_status:
-                self._status_cache = fresh_status
-                status_data = fresh_status
-        except Exception as err:
-            _LOGGER.warning("Could not fetch station status (keeping last cache): %s", err)
-            if not status_data:
-                raise UpdateFailed(f"Station status unavailable: {err}") from err
-
-        # --- Load data (power / shed state) ---
-        load_data = self._load_cache if hasattr(self, "_load_cache") else {}
-        try:
-            fresh_load = await self.hass.async_add_executor_job(
-                self.client.get_load, self.station_id
-            )
-            if fresh_load:
-                self._load_cache = fresh_load
-                load_data = fresh_load
-        except Exception as err:
-            _LOGGER.warning("Could not fetch load data (keeping last cache): %s", err)
 
         # Fetch session history — monthly cache covers current + 2 prior months
         # with per-month scoped API calls that never hit the 100-record cap.
@@ -88,11 +93,14 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             _LOGGER.warning("Could not fetch session data (keeping last cache): %s", err)
 
+        # Fetch transaction history (revenue) — current + 2 prior months in weekly
+        # chunks. Best-effort: on any failure keep the last known good cache so the
+        # revenue sensors stay populated.
         try:
             fresh_tx = await self.hass.async_add_executor_job(
                 self.client.get_transaction_data, self.station_id, local_tz
             )
-            if fresh_tx:
+            if fresh_tx:  # Only replace cache if we got actual data back
                 self._transaction_cache = fresh_tx
             else:
                 _LOGGER.debug("Transaction fetch returned empty — keeping last good cache")

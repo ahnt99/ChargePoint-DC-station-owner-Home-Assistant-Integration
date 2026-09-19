@@ -12,7 +12,35 @@ from zeep.exceptions import Fault
 
 from .const import CHARGEPOINT_WSDL, CHARGEPOINT_ENDPOINT, WSSE_NS, PASSWORD_TYPE
 
+try:  # requests is a HA core dependency; guard so a missing lib degrades gracefully
+    import requests as _requests
+    _REQUESTS_ERRORS: tuple = (_requests.RequestException,)
+except ImportError:  # pragma: no cover - requests is always present under HA
+    _REQUESTS_ERRORS = ()
+
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """Return True for transport-level failures (network down, timeouts, TLS, HTTP 4xx/5xx).
+
+    These are the conditions under which a zeep Client may have been built from a
+    bad or partial WSDL fetch and must be discarded so the next call rebuilds it
+    cleanly. SOAP Faults and business-logic errors are *not* connection errors.
+    """
+    if isinstance(exc, Fault):
+        return False
+    if isinstance(exc, _REQUESTS_ERRORS):
+        return True
+    # Cover any remaining transport-level exception by name (zeep wraps requests
+    # errors, but a version difference could surface a different class).
+    name = type(exc).__name__.lower()
+    return (
+        "connection" in name
+        or "timeout" in name
+        or "httperror" in name
+        or "badstatus" in name
+    )
 
 
 class ChargePointAPIError(Exception):
@@ -52,27 +80,46 @@ class ChargePointClient:
         self._api_password = api_password
         self._client: Client | None = None
 
+    def _build_client(self) -> Client:
+        """Construct a fresh zeep Client from the bundled local WSDL."""
+        wsse = ChargePointWSSE(username=self._api_key, password=self._api_password)
+        transport = Transport(operation_timeout=30, timeout=30)
+        client = Client(
+            wsdl=CHARGEPOINT_WSDL,
+            wsse=wsse,
+            transport=transport,
+        )
+        # Point all operations at the live endpoint (the WSDL already declares it,
+        # but this keeps the code explicit and resilient to a stale bundled file).
+        client.service._binding_options["address"] = CHARGEPOINT_ENDPOINT
+        return client
+
     def _get_client(self) -> Client:
+        """Return the cached client, building it on first use.
+
+        If construction fails (e.g. the WSDL file is missing/corrupt), reset the
+        cache so a later call retries rather than caching a broken client forever.
+        """
         if self._client is None:
-            wsse = ChargePointWSSE(username=self._api_key, password=self._api_password)
-            transport = Transport(operation_timeout=30, timeout=30)
-            self._client = Client(
-                wsdl=CHARGEPOINT_WSDL,
-                wsse=wsse,
-                transport=transport,
-            )
-            self._client.service._binding_options["address"] = CHARGEPOINT_ENDPOINT
+            try:
+                self._client = self._build_client()
+            except Exception as exc:  # noqa: BLE001
+                self._client = None  # don't cache a failed construction
+                _LOGGER.error(
+                    "Failed to build ChargePoint SOAP client: %s", exc
+                )
+                raise ChargePointAPIError(f"client init failed: {exc}") from exc
         return self._client
+
+    def _reset_client(self) -> None:
+        """Discard the cached client so the next call rebuilds it from scratch."""
+        self._client = None
 
     def _make_type(self, type_name: str, **fields: Any) -> Any:
         """Build a typed WSDL object by name."""
         client = self._get_client()
         t = client.get_type(f"ns0:{type_name}")
         return t(**fields)
-
-    def _reset_client(self) -> None:
-        """Force zeep client to rebuild on next call — used after connection errors."""
-        self._client = None
 
     def _call(self, method: str, **kwargs: Any) -> Any:
         """Make a SOAP call, log the full serialized response for debugging, handle errors."""
@@ -86,9 +133,11 @@ class ChargePointClient:
             raise ChargePointAPIError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             _LOGGER.error("Error calling %s: %s", method, exc)
-            # Reset client so zeep rebuilds cleanly on next call
-            # (prevents stale/corrupted state after 404/502/timeout outages)
-            self._reset_client()
+            # If this was a transport-level failure, the cached client may be in a
+            # bad state — drop it so the next call rebuilds cleanly instead of
+            # reusing a corrupted client forever.
+            if _is_connection_error(exc):
+                self._reset_client()
             raise ChargePointAPIError(str(exc)) from exc
 
         # Log full response so we can see exactly what the API returns
@@ -364,7 +413,13 @@ class ChargePointClient:
         return all_sessions
 
     def get_transaction_data(self, station_id: str, local_tz) -> list[dict]:
-        """Fetch transaction data (with revenue) for current + 2 prior months in weekly chunks."""
+        """Fetch transaction data (with revenue) for current + 2 prior months in weekly chunks.
+
+        Splits each month into 7-day windows so even a very busy station never
+        hits the 100-record API cap per call. Each window retries once on
+        transient errors; response code 136 (no data) is treated as empty, not
+        an error.
+        """
         from datetime import datetime, timezone, timedelta
         import calendar
 
@@ -373,13 +428,15 @@ class ChargePointClient:
         all_transactions: list[dict] = []
 
         def _fetch_window(from_dt: datetime, to_dt: datetime) -> list[dict]:
+            """Fetch one time window, return parsed transactions. Retries once on transient errors."""
             kwargs: dict[str, Any] = {
                 "stationID": station_id,
                 "fromTransactionTimeStamp": from_dt,
                 "toTransactionTimeStamp": to_dt,
             }
             q = self._make_type("getTransDataSearchRequest", **kwargs)
-            for attempt in range(2):
+            last_exc = None
+            for attempt in range(2):  # Try twice before giving up
                 try:
                     response = self._call("getTransactionData", searchQuery=q)
                     result = getattr(response, "transactions", None)
@@ -401,32 +458,30 @@ class ChargePointClient:
                     } for t in data]
                 except ChargePointAPIError as exc:
                     if "136" in str(exc):
-                        return []
-                    if attempt == 0:
-                        import time; time.sleep(2)
-                        continue
-                    _LOGGER.warning("Transaction fetch %s→%s failed: %s", from_dt.date(), to_dt.date(), exc)
-                    return []
+                        return []  # No data for period — not an error
+                    last_exc = exc
                 except Exception as exc:
-                    if attempt == 0:
-                        import time; time.sleep(2)
-                        continue
-                    _LOGGER.warning("Transaction fetch %s→%s unexpected: %s", from_dt.date(), to_dt.date(), exc)
-                    return []
+                    last_exc = exc
+                if attempt == 0:
+                    import time
+                    time.sleep(2)  # Brief pause before retry
+            _LOGGER.warning("Transaction fetch %s→%s failed after retry: %s", from_dt.date(), to_dt.date(), last_exc)
             return []
 
-        def _fetch_month_chunks(year: int, month: int, month_end_utc: datetime) -> list[dict]:
+        def _fetch_month_in_chunks(year: int, month: int, month_end_utc: datetime) -> list[dict]:
+            """Fetch an entire month by splitting into 7-day chunks."""
             month_start_local = now_local.replace(
                 year=year, month=month, day=1,
                 hour=0, minute=0, second=0, microsecond=0
             )
-            chunk_start = month_start_local.astimezone(timezone.utc)
-            sessions: list[dict] = []
+            month_start_utc = month_start_local.astimezone(timezone.utc)
+            chunk_start = month_start_utc
+            transactions: list[dict] = []
             while chunk_start < month_end_utc:
                 chunk_end = min(chunk_start + timedelta(days=7), month_end_utc)
-                sessions.extend(_fetch_window(chunk_start, chunk_end))
+                transactions.extend(_fetch_window(chunk_start, chunk_end))
                 chunk_start = chunk_end
-            return sessions
+            return transactions
 
         for offset in range(3):
             month = now_local.month - offset
@@ -434,13 +489,20 @@ class ChargePointClient:
             while month <= 0:
                 month += 12
                 year -= 1
-            month_end_utc = now_utc if offset == 0 else now_local.replace(
-                year=year, month=month,
-                day=calendar.monthrange(year, month)[1],
-                hour=23, minute=59, second=59, microsecond=0
-            ).astimezone(timezone.utc)
-            all_transactions.extend(_fetch_month_chunks(year, month, month_end_utc))
 
+            if offset == 0:
+                month_end_utc = now_utc
+            else:
+                last_day = calendar.monthrange(year, month)[1]
+                month_end_local = now_local.replace(
+                    year=year, month=month, day=last_day,
+                    hour=23, minute=59, second=59, microsecond=0
+                )
+                month_end_utc = month_end_local.astimezone(timezone.utc)
+
+            all_transactions.extend(_fetch_month_in_chunks(year, month, month_end_utc))
+
+        # Sort newest-first by endTime
         all_transactions.sort(
             key=lambda t: t["endTime"] if t.get("endTime") else datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,

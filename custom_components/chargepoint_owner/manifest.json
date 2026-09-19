@@ -2,10 +2,10 @@
   "domain": "chargepoint_owner",
   "name": "ChargePoint Station Owner",
   "config_flow": true,
-  "documentation": "https://github.com/your-username/chargepoint-owner-ha",
-  "issue_tracker": "https://github.com/your-username/chargepoint-owner-ha/issues",
+  "documentation": "https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration",
+  "issue_tracker": "https://github.com/ahnt99/ChargePoint-DC-station-owner-Home-Assistant-Integration/issues",
   "requirements": ["zeep>=4.2.1"],
-  "codeowners": ["@your-username"],
+  "codeowners": ["ahnt99"],
   "version": "1.0.0",
   "iot_class": "cloud_polling",
   "loggers": ["custom_components.chargepoint_owner"]
