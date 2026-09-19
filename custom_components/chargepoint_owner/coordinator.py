@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ChargePointClient, ChargePointAPIError
+from .api import ChargePointClient
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,21 +32,14 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self.station_id = station_id
+        self._status_cache: list[dict] = []
+        self._load_cache: dict = {}
         self._monthly_cache: list[dict] = []
         self._transaction_cache: list[dict] = []
         self._alarm_cache: list[dict] = []
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest data from the API."""
-        try:
-            status_data = await self.hass.async_add_executor_job(
-                self.client.get_station_status, self.station_id
-            )
-            load_data = await self.hass.async_add_executor_job(
-                self.client.get_load, self.station_id
-            )
-        except ChargePointAPIError as err:
-            raise UpdateFailed(f"ChargePoint API error: {err}") from err
 
         # Resolve HA local timezone early — needed for session fetches
         try:
@@ -54,6 +47,32 @@ class ChargePointCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             local_tz = zoneinfo.ZoneInfo(self.hass.config.time_zone)
         except Exception:
             local_tz = timezone.utc
+
+        # --- Station status (port availability) ---
+        status_data = self._status_cache if hasattr(self, "_status_cache") else []
+        try:
+            fresh_status = await self.hass.async_add_executor_job(
+                self.client.get_station_status, self.station_id
+            )
+            if fresh_status:
+                self._status_cache = fresh_status
+                status_data = fresh_status
+        except Exception as err:
+            _LOGGER.warning("Could not fetch station status (keeping last cache): %s", err)
+            if not status_data:
+                raise UpdateFailed(f"Station status unavailable: {err}") from err
+
+        # --- Load data (power / shed state) ---
+        load_data = self._load_cache if hasattr(self, "_load_cache") else {}
+        try:
+            fresh_load = await self.hass.async_add_executor_job(
+                self.client.get_load, self.station_id
+            )
+            if fresh_load:
+                self._load_cache = fresh_load
+                load_data = fresh_load
+        except Exception as err:
+            _LOGGER.warning("Could not fetch load data (keeping last cache): %s", err)
 
         # Fetch session history — monthly cache covers current + 2 prior months
         # with per-month scoped API calls that never hit the 100-record cap.
